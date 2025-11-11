@@ -247,54 +247,51 @@ class MainWindow(QMainWindow):
         y = self.df["Intensity"]
         x = self.df["Wavenumber"]
 
+        indexes = [i for i in range(len(y))]
+        y_array = np.array(y)
+        indexes_array = np.array(indexes)
+
         y_dim: int = np.shape(y_array)[0]
         eps: int = int(0.02 * y_dim)
         best_score_result: int = y_dim
-        best_num_points: int = 0
         best_key_points: np.array([], dtype=np.int64)
-    
+
         for num_points in range(3, 10, 1):
-            direct_key_point = direct_method(x_array, y_array, num_points)
-    
+            direct_key_point = direct_method(indexes_array, y_array, num_points)
+
             fixed_points_without_zero = fix_points(direct_key_point, eps, y_array)
             baseline_without_zero = baseline_on_key_point(
                 fixed_points_without_zero,
                 y_array[fixed_points_without_zero],
-                x_array
+                indexes_array
             )
             score_without_zero = np.sum(y_array < baseline_without_zero)
-    
+
             points_with_zero = np.unique(np.append(direct_key_point, 0))
             fixed_points_with_zero = fix_points(points_with_zero, eps, y_array)
             baseline_with_zero = baseline_on_key_point(
                 fixed_points_with_zero,
                 y_array[fixed_points_with_zero],
-                x_array
+                indexes_array
             )
             score_with_zero = np.sum(y_array < baseline_with_zero)
-    
+
             if score_without_zero <= score_with_zero:
                 current_score = score_without_zero
                 current_points = fixed_points_without_zero
             else:
                 current_score = score_with_zero
                 current_points = fixed_points_with_zero
-    
+
             if current_score < best_score_result:
                 best_score_result = current_score
-                best_num_points = num_points
                 best_key_points = current_points
-    
-    
+
         y_for_best_x = y_array[best_key_points]
 
-        # breakpoint()
-        # import matplotlib.pyplot as plt
-        baseline = baseline_on_key_point(best_key_points, y_for_best_x, x_array)
+        baseline = baseline_on_key_point(best_key_points, y_for_best_x, indexes_array)
+
         compensated = self.df["Intensity"] - baseline
-        # plt.plot(y, c='darkblue')
-        # plt.plot(baseline, c='green')
-        # plt.show()
 
         self.df["Compensated"] = compensated - np.min(compensated)
         self.table.setModel(PandasModel(self.df))
