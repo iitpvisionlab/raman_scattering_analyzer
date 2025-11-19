@@ -1,4 +1,5 @@
 import sys
+import os
 import pandas as pd
 from PyQt6.QtWidgets import (
     QApplication,
@@ -15,6 +16,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QLabel,
+    QMessageBox,
 )
 from PyQt6.QtCore import QAbstractTableModel, Qt, QSize, QModelIndex
 from PyQt6.QtGui import QAction
@@ -129,7 +131,7 @@ class MainWindow(QMainWindow):
         self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, toolbar)
 
         load_action = QAction("Load spectrum", self)
-        load_action.triggered.connect(self.load_spectrum)
+        load_action.triggered.connect(self.load_spectra)
         toolbar.addAction(load_action)
 
         export_action = QAction("Export spectrum", self)
@@ -154,13 +156,13 @@ class MainWindow(QMainWindow):
         main_widget.setLayout(main_layout)
         self.setCentralWidget(main_widget)
 
-        self.df = None
+        self.spectra = {}
         self.current_spectrum_col = None
 
         self.table.doubleClicked.connect(self.plot_column)
 
     def plot_column(self, index: QModelIndex):
-        if self.df is not None:
+        if self.spectra is not None:
             col = index.column()
             col_name = self.df.columns[col]
             # Skip plotting wavenumber column (only intensity columns)
@@ -171,17 +173,57 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(f"Plotting column: {col_name}")
                 self.current_spectrum_col = col_name
 
-    def load_spectrum(self):
-        file_name, _ = QFileDialog.getOpenFileName(
-            self, "Open Spectrum File", "", "Text Files (*.dpt);;All Files (*)"
-        )
-        if file_name:
-            self.df = pd.read_csv(
-                file_name, sep="\t", header=None, names=["Wavenumber", "Intensity"]
+    def load_spectra(self):
+        files, _ = QFileDialog.getOpenFileNames(self, "Open Spectrum Files", "", "Text Files (*.dpt);;All Files (*)")
+        if not files:
+            return
+        for f in files:
+            df = pd.read_csv(f, sep="\t", header=None, names=['Wavenumber', 'Intensity'])
+            label = os.path.basename(f)
+            self.spectra[label] = df
+        self.current_spectrum_col = label
+        self.combine_spectra_columns()
+        self.plot_all_combined_spectra()
+
+    def plot_all_combined_spectra(self):
+        if not hasattr(self, 'combined_df'):
+            return  # No data to plot
+        self.plot_canvas.axes.clear()
+        w = self.combined_df['Wavenumber']
+        for col in self.combined_df.columns:
+            if col != 'Wavenumber':
+                self.plot_canvas.axes.plot(w, self.combined_df[col], label=col)
+        self.plot_canvas.axes.set_xlabel('Wavenumber')
+        self.plot_canvas.axes.set_ylabel('Intensity')
+        self.plot_canvas.axes.legend()
+        self.plot_canvas.draw()
+
+    def combine_spectra_columns(self):
+        merged_df = None
+        for label, df in self.spectra.items():
+            df_renamed = df.rename(columns={'Intensity': label})
+            if merged_df is None:
+                merged_df = df_renamed
+            else:
+                merged_df = pd.merge(merged_df, df_renamed, on='Wavenumber', how='outer')
+        merged_df = merged_df.sort_values('Wavenumber').reset_index(drop=True)
+
+        if merged_df.isnull().any(axis=1).any():
+            msg = QMessageBox()
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setWindowTitle("Warning: Unmatched Wavenumbers")
+            msg.setText(
+                "Some loaded spectra have uncorresponding wavenumbers.\n"
+                "Rows with missing values will be removed.\n"
+                "Please click 'OK' to proceed."
             )
-            self.table.setModel(PandasModel(self.df))
-            self.plot_canvas.plot(self.df["Wavenumber"], self.df["Intensity"])
-            self.current_spectrum_col = "Intensity"
+            msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+            msg.exec()
+        
+        merged_df = merged_df.dropna().reset_index(drop=True)
+
+        self.combined_df = merged_df
+        self.table.setModel(PandasModel(self.combined_df))
 
     def export_spectrum(self):
         if self.df is None or not hasattr(self, "current_spectrum_col"):
@@ -205,9 +247,8 @@ class MainWindow(QMainWindow):
         from scipy.interpolate import PchipInterpolator
         import numpy as np
         from numpy.typing import NDArray
-
-        # Placeholder for compensation logic
-        def baseline_on_key_point(x_minima: NDArray[np.int64],
+        
+        def _baseline_on_key_point(x_minima: NDArray[np.int64],
                                   y_minima: NDArray[np.float64],
                                   x: NDArray[np.int64]) -> NDArray[np.float64]:
             pchip = PchipInterpolator(x_minima, y_minima)
@@ -215,7 +256,7 @@ class MainWindow(QMainWindow):
             return baseline
         
         
-        def direct_method(x_array: NDArray[np.int64],
+        def _direct_method(x_array: NDArray[np.int64],
                           y_array: NDArray[np.float64],
                           num_points: int) -> NDArray[np.int64]:
         
@@ -230,10 +271,9 @@ class MainWindow(QMainWindow):
             return min_indices
         
         
-        def fix_points(key_points: NDArray[np.int64],
+        def _fix_points(key_points: NDArray[np.int64],
                        eps: int,
                        y_array: NDArray[np.float64]) -> NDArray[np.float64]:
-        
             starts = np.maximum(key_points - eps, 0)
             ends = np.minimum(key_points + eps, len(y_array))
         
@@ -244,59 +284,69 @@ class MainWindow(QMainWindow):
         
             return np.unique(new_points)
 
-        y = self.df["Intensity"]
-        x = self.df["Wavenumber"]
+        if not hasattr(self, 'combined_df'):
+            return  # No data to compensate
+        
+        for col in self.combined_df.columns:
+            if col == 'Wavenumber':
+                continue
+            y = self.combined_df[col]
 
-        indexes = [i for i in range(len(y))]
-        y_array = np.array(y)
-        indexes_array = np.array(indexes)
+            # y = self.df["Intensity"]
+            # x = self.df["Wavenumber"]
 
-        y_dim: int = np.shape(y_array)[0]
-        eps: int = int(0.02 * y_dim)
-        best_score_result: int = y_dim
-        best_key_points: np.array([], dtype=np.int64)
+            indexes = [i for i in range(len(y))]
+            y_array = np.array(y)
+            indexes_array = np.array(indexes)
 
-        for num_points in range(3, 10, 1):
-            direct_key_point = direct_method(indexes_array, y_array, num_points)
+            y_dim: int = np.shape(y_array)[0]
+            eps: int = max(int(0.02 * y_dim), 1)
+            best_score_result: int = y_dim
+            best_key_points: np.array([], dtype=np.int64)
 
-            fixed_points_without_zero = fix_points(direct_key_point, eps, y_array)
-            baseline_without_zero = baseline_on_key_point(
-                fixed_points_without_zero,
-                y_array[fixed_points_without_zero],
-                indexes_array
-            )
-            score_without_zero = np.sum(y_array < baseline_without_zero)
+            for num_points in range(3, 10, 1):
+                direct_key_point = _direct_method(indexes_array, y_array, num_points)
+                fixed_points_without_zero = _fix_points(direct_key_point, eps, y_array)
+                baseline_without_zero = _baseline_on_key_point(
+                    fixed_points_without_zero,
+                    y_array[fixed_points_without_zero],
+                    indexes_array
+                )
+                score_without_zero = np.sum(y_array < baseline_without_zero)
 
-            points_with_zero = np.unique(np.append(direct_key_point, 0))
-            fixed_points_with_zero = fix_points(points_with_zero, eps, y_array)
-            baseline_with_zero = baseline_on_key_point(
-                fixed_points_with_zero,
-                y_array[fixed_points_with_zero],
-                indexes_array
-            )
-            score_with_zero = np.sum(y_array < baseline_with_zero)
+                points_with_zero = np.unique(np.append(direct_key_point, 0))
+                fixed_points_with_zero = _fix_points(points_with_zero, eps, y_array)
+                baseline_with_zero = _baseline_on_key_point(
+                    fixed_points_with_zero,
+                    y_array[fixed_points_with_zero],
+                    indexes_array
+                )
+                score_with_zero = np.sum(y_array < baseline_with_zero)
 
-            if score_without_zero <= score_with_zero:
-                current_score = score_without_zero
-                current_points = fixed_points_without_zero
-            else:
-                current_score = score_with_zero
-                current_points = fixed_points_with_zero
+                if score_without_zero <= score_with_zero:
+                    current_score = score_without_zero
+                    current_points = fixed_points_without_zero
+                else:
+                    current_score = score_with_zero
+                    current_points = fixed_points_with_zero
 
-            if current_score < best_score_result:
-                best_score_result = current_score
-                best_key_points = current_points
+                if current_score < best_score_result:
+                    best_score_result = current_score
+                    best_key_points = current_points
 
-        y_for_best_x = y_array[best_key_points]
+            y_for_best_x = y_array[best_key_points]
 
-        baseline = baseline_on_key_point(best_key_points, y_for_best_x, indexes_array)
+            baseline = _baseline_on_key_point(best_key_points, y_for_best_x, indexes_array)
 
-        compensated = self.df["Intensity"] - baseline
+            compensated = y - baseline
 
-        self.df["Compensated"] = compensated - np.min(compensated)
-        self.table.setModel(PandasModel(self.df))
-        self.plot_canvas.plot(self.df["Wavenumber"], self.df["Compensated"])
-        self.current_spectrum_col = "Compensated"
+            self.combined_df[col] = compensated - np.min(compensated)
+
+
+            self.table.setModel(PandasModel(self.combined_df))
+            self.plot_all_combined_spectra()
+            # self.plot_canvas.plot(self.df["Wavenumber"], self.df["Compensated"])
+            # self.current_spectrum_col = "Compensated"
 
 
 if __name__ == "__main__":
