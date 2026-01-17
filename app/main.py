@@ -1,5 +1,7 @@
 import sys
+from typing import TYPE_CHECKING
 import os
+
 import pandas as pd
 from PyQt6.QtWidgets import (
     QApplication,
@@ -18,11 +20,22 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMessageBox,
 )
-from PyQt6.QtCore import QAbstractTableModel, Qt, QSize, QModelIndex
-from PyQt6.QtGui import QAction
+from PyQt6.QtCore import (
+    QAbstractItemModel,
+    QAbstractTableModel,
+    Qt,
+    QSize,
+    QModelIndex,
+    pyqtSignal,
+    QSettings,
+    QDir
+)
+from PyQt6.QtGui import QAction, QIcon
 
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+
+DisplayRole = Qt.ItemDataRole.DisplayRole
 
 
 class PandasModel(QAbstractTableModel):
@@ -36,19 +49,71 @@ class PandasModel(QAbstractTableModel):
     def columnCount(self, parent=None):
         return len(self._dataframe.columns)
 
-    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
-        if index.isValid() and role == Qt.ItemDataRole.DisplayRole:
+    def data(self, index, role=DisplayRole):
+        if index.isValid() and role == DisplayRole:
             value = self._dataframe.iloc[index.row(), index.column()]
             return str(value)
         return None
 
-    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
-        if role == Qt.ItemDataRole.DisplayRole:
+    def headerData(self, section, orientation, role=DisplayRole):
+        if role == DisplayRole:
             if orientation == Qt.Orientation.Horizontal:
                 return self._dataframe.columns[section]
             else:
                 return str(self._dataframe.index[section])
         return None
+
+    def compensate_background(self):
+        from .preprocess import compensate_background
+
+        self._dataframe = compensate_background(self._dataframe)
+        n_cols = self.columnCount()
+        n_rows = self.rowCount()
+        self.dataChanged.emit(self.index(0, 1), self.index(n_rows - 1, n_cols - 1))
+
+    def normalize_total(self):
+        from .preprocess import normalize_total
+
+        self._dataframe = normalize_total(self._dataframe)
+        n_cols = self.columnCount()
+        n_rows = self.rowCount()
+        self.dataChanged.emit(self.index(0, 1), self.index(n_rows - 1, n_cols - 1))
+
+    def normalize_in_range(self, wavelenght_range: tuple[float, float]):
+        from .preprocess import normalize_in_range
+
+        self._dataframe = normalize_in_range(self._dataframe, wavelenght_range)
+        n_cols = self.columnCount()
+        n_rows = self.rowCount()
+        self.dataChanged.emit(self.index(0, 1), self.index(n_rows - 1, n_cols - 1))
+
+    def data_for_columns(self, columns: list[str]) -> pd.DataFrame:
+        if not columns:
+            return self._dataframe
+        return self._dataframe[["Wavenumber"] + columns]
+    
+    def pca(X, method='centered', n_components=None):
+        import numpy as np
+        from sklearn.decomposition import PCA
+        from sklearn.preprocessing import StandardScaler
+
+        if method == 'centered':
+            X_processed = X - np.mean(X, axis=0)
+            pca = PCA(n_components=n_components)
+            scores = pca.fit_transform(X_processed)
+
+        elif method == 'standardized':
+            scaler = StandardScaler()
+            X_processed = scaler.fit_transform(X)
+            pca = PCA(n_components=n_components)
+            scores = pca.fit_transform(X_processed)
+
+        return {
+            'eigenvalues': pca.explained_variance_, # собственные значения
+            'percentage_of_variance': pca.explained_variance_ratio_ * 100, # percentage of variance для компонент
+            'loadings': pca.components_.T, # собственные векторы
+            'scores': scores # координаты объектов в пространстве главных компонент
+        }
 
 
 class PlotCanvas(FigureCanvas):
@@ -63,6 +128,64 @@ class PlotCanvas(FigureCanvas):
         self.axes.set_xlabel("Wavenumber")
         self.axes.set_ylabel("Intensity")
         self.draw()
+
+    def plot_all_combined_spectra(self, combined_df: pd.DataFrame):
+        self.axes.clear()
+        w = combined_df["Wavenumber"]
+        for col in combined_df.columns:
+            if col != "Wavenumber":
+                self.axes.plot(w, combined_df[col], label=col)
+        self.axes.set_xlabel("Wavenumber")
+        self.axes.set_ylabel("Intensity")
+        self.axes.legend()
+        self.draw()
+
+
+class SetRangeDialog(QDialog):
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Set Wavelength Range")
+        self.setFixedSize(350, 180)
+        layout = QVBoxLayout(self)
+
+        start_layout = QHBoxLayout()
+        self.start_edit = QLineEdit(self)
+        self.start_edit.setPlaceholderText("Set range start")
+        start_layout.addWidget(self.start_edit)
+        layout.addLayout(start_layout)
+
+        stop_layout = QHBoxLayout()
+        self.stop_edit = QLineEdit(self)
+        self.stop_edit.setPlaceholderText("Set range stop")
+        stop_layout.addWidget(self.stop_edit)
+        layout.addLayout(stop_layout)
+
+        btn_layout = QHBoxLayout()
+        ok_btn = QPushButton("OK", self)
+        ok_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(ok_btn)
+        layout.addLayout(btn_layout)
+
+    def get_range(self):
+        return (self.start_edit.text(),
+            self.stop_edit.text())
+    
+
+class SetNComponents(QDialog):
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Set number of components")
+        self.setFixedSize(350, 180)
+        layout = QVBoxLayout(self)
+
+        components_layout = QHBoxLayout()
+        self.components_edit = QLineEdit(self)
+        self.components_edit.setPlaceholderText("Set number of components")
+        components_layout.addWidget(self.components_edit)
+        layout.addLayout(components_layout)
+
+    def get_n_components(self):
+        return self.components_edit.text()
 
 
 class ExportDialog(QDialog):
@@ -119,94 +242,64 @@ class ExportDialog(QDialog):
         }
 
 
-class MainWindow(QMainWindow):
-    def __init__(self):
+class PandasView(QTableView):
+    on_plot_requested = pyqtSignal(pd.DataFrame)
+
+    def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Spectrum Loader")
-        self.setGeometry(100, 100, 800, 600)
-        widget = QWidget()
-
-        toolbar = QToolBar("Main Toolbar")
-        toolbar.setIconSize(QSize(24, 24))
-        self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, toolbar)
-
-        load_action = QAction("Load spectrum", self)
-        load_action.triggered.connect(self.load_spectra)
-        toolbar.addAction(load_action)
-
-        export_action = QAction("Export spectrum", self)
-        export_action.triggered.connect(self.export_spectrum)
-        toolbar.addAction(export_action)
-
-        compensate_action = QAction("Compensate background", self)
-        compensate_action.triggered.connect(self.compensate_background)
-        toolbar.addAction(compensate_action)
-
-        # Layout for table and plot (side by side)
-        table_plot_layout = QHBoxLayout()
-        self.table = QTableView()
-        table_plot_layout.addWidget(self.table)
-        self.plot_canvas = PlotCanvas(self)
-        table_plot_layout.addWidget(self.plot_canvas)
-
-        # Main layout with button on top
-        main_widget = QWidget()
-        main_layout = QVBoxLayout()
-        main_layout.addLayout(table_plot_layout)
-        main_widget.setLayout(main_layout)
-        self.setCentralWidget(main_widget)
-
         self.spectra = {}
-        self.current_spectrum_col = None
 
-        self.table.doubleClicked.connect(self.plot_column)
+    def set_dataframe(self, dataframe: pd.DataFrame):
+        model = PandasModel(dataframe)
+        self.setModel(model)
+        model.dataChanged.connect(self._replot)
+        self.horizontalHeader().selectionModel().selectionChanged.connect(self._replot)
+        self._replot()
 
-    def plot_column(self, index: QModelIndex):
-        if self.spectra is not None:
-            col = index.column()
-            col_name = self.df.columns[col]
-            # Skip plotting wavenumber column (only intensity columns)
-            if col_name.lower() != "wavenumber":
-                x = self.df["Wavenumber"]
-                y = self.df[col_name]
-                self.plot_canvas.plot(x, y)
-                self.statusBar().showMessage(f"Plotting column: {col_name}")
-                self.current_spectrum_col = col_name
+    def compensate_background(self):
+        self.model().compensate_background()
 
-    def load_spectra(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "Open Spectrum Files", "", "Text Files (*.dpt);;All Files (*)")
-        if not files:
-            return
+    def normalize_total(self):
+        self.model().normalize_total()
+
+    def normalize_in_range(self):
+        dialog = SetRangeDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.model().normalize_in_range(dialog.get_range())
+
+    def _replot(self):
+        columns = {i.column() for i in self.selectedIndexes()}
+        columns.discard(0)
+        model = self.model()
+        labels = [
+            model.headerData(idx, Qt.Orientation.Horizontal, DisplayRole)
+            for idx in columns
+        ]
+        self.on_plot_requested.emit(self.model().data_for_columns(labels))
+    
+    def load_spectra(self, files: list[str], reset: bool = False):
+        if reset:
+           self.spectra.clear()
         for f in files:
-            df = pd.read_csv(f, sep="\t", header=None, names=['Wavenumber', 'Intensity'])
+            df = pd.read_csv(
+                f, sep="\t", header=None, names=["Wavenumber", "Intensity"]
+            )
             label = os.path.basename(f)
             self.spectra[label] = df
         self.current_spectrum_col = label
         self.combine_spectra_columns()
-        self.plot_all_combined_spectra()
-
-    def plot_all_combined_spectra(self):
-        if not hasattr(self, 'combined_df'):
-            return  # No data to plot
-        self.plot_canvas.axes.clear()
-        w = self.combined_df['Wavenumber']
-        for col in self.combined_df.columns:
-            if col != 'Wavenumber':
-                self.plot_canvas.axes.plot(w, self.combined_df[col], label=col)
-        self.plot_canvas.axes.set_xlabel('Wavenumber')
-        self.plot_canvas.axes.set_ylabel('Intensity')
-        self.plot_canvas.axes.legend()
-        self.plot_canvas.draw()
 
     def combine_spectra_columns(self):
         merged_df = None
         for label, df in self.spectra.items():
-            df_renamed = df.rename(columns={'Intensity': label})
+            df_renamed = df.rename(columns={"Intensity": label})
             if merged_df is None:
                 merged_df = df_renamed
             else:
-                merged_df = pd.merge(merged_df, df_renamed, on='Wavenumber', how='outer')
-        merged_df = merged_df.sort_values('Wavenumber').reset_index(drop=True)
+                merged_df = pd.merge(
+                    merged_df, df_renamed, on="Wavenumber", how="outer"
+                )
+        merged_df = merged_df.sort_values("Wavenumber").reset_index(drop=True)
 
         if merged_df.isnull().any(axis=1).any():
             msg = QMessageBox()
@@ -219,22 +312,116 @@ class MainWindow(QMainWindow):
             )
             msg.setStandardButtons(QMessageBox.StandardButton.Ok)
             msg.exec()
-        
+
         merged_df = merged_df.dropna().reset_index(drop=True)
 
         self.combined_df = merged_df
-        self.table.setModel(PandasModel(self.combined_df))
+        self.set_dataframe(self.combined_df)
+
+    def centered_pca(self):
+        dialog = SetNComponents(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.model().pca(self.combined_df, method='centered', n_components=dialog.get_n_components)
+
+    def standardscaler_pca(self):
+        dialog = SetNComponents(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.model().pca(self.combined_df, method='standardized', n_components=dialog.get_n_components)
+
+    if TYPE_CHECKING:
+
+        def model(self) -> PandasModel: ...
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.settings = QSettings()
+        self.setWindowTitle("Spectrum Loader")
+        self.setGeometry(100, 100, 800, 600)
+        self.table = PandasView()
+
+        toolbar = QToolBar("Main Toolbar")
+        toolbar.setIconSize(QSize(24, 24))
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, toolbar)
+
+        load_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.DocumentNew), "New project", self)
+        load_action.triggered.connect(self.new_project)
+        toolbar.addAction(load_action)
+
+        load_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.EditPaste), "Add spectra", self)
+        load_action.triggered.connect(self.add_spectra)
+        toolbar.addAction(load_action)
+
+        export_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.DocumentSave), "Export spectrum", self)
+        export_action.triggered.connect(self.export_spectrum)
+        toolbar.addAction(export_action)
+
+        compensate_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), "Compensate background", self)
+        compensate_action.triggered.connect(self.table.compensate_background)
+        toolbar.addAction(compensate_action)
+
+        compensate_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), "Normalize total", self)
+        compensate_action.triggered.connect(self.table.normalize_total)
+        toolbar.addAction(compensate_action)
+
+        compensate_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), "Normalize in range", self)
+        compensate_action.triggered.connect(self.table.normalize_in_range)
+        toolbar.addAction(compensate_action)
+
+        compensate_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), "Centered PCA", self)
+        compensate_action.triggered.connect(self.table.centered_pca)
+        toolbar.addAction(compensate_action)
+
+        compensate_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), "StandardScaler PCA", self)
+        compensate_action.triggered.connect(self.table.standardscaler_pca)
+        toolbar.addAction(compensate_action)
+
+        # Layout for table and plot (side by side)
+        table_plot_layout = QHBoxLayout()
+        table_plot_layout.addWidget(self.table)
+        self.plot_canvas = PlotCanvas(self)
+        table_plot_layout.addWidget(self.plot_canvas)
+
+        # Main layout with button on top
+        main_widget = QWidget()
+        main_layout = QVBoxLayout()
+        main_layout.addLayout(table_plot_layout)
+        main_widget.setLayout(main_layout)
+        self.setCentralWidget(main_widget)
+
+        self.current_spectrum_col = None
+        self.table.on_plot_requested.connect(self.plot_canvas.plot_all_combined_spectra)
+
+        # self.table.doubleClicked.connect(self.plot_column)
+
+    def add_spectra(self):
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Open Spectrum Files", "", "Text Files (*.dpt);;All Files (*)"
+        )
+        if not files:
+            return
+        directory = QDir(files[0]).absolutePath()
+        self.settings.setValue("LastDir", directory)
+        self.table.load_spectra(files)
+
+    def new_project(self):
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Open Spectrum Files", "", "Text Files (*.dpt);;All Files (*)"
+        )
+        if not files:
+            return
+        directory = QDir(files[0]).absolutePath()
+        self.settings.setValue("LastDir", directory)
+        self.table.load_spectra(files, reset=True)
 
     def export_spectrum(self):
-        if self.df is None or not hasattr(self, "current_spectrum_col"):
-            return  # Nothing to export
-        col_name = self.current_spectrum_col
-        if col_name is None or col_name.lower() == "wavenumber":
-            return  # No valid spectrum selected
+        labels = [*self.table.spectra.keys()]
         dialog = ExportDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             opts = dialog.get_options()
-            export_df = self.df[["Wavenumber", col_name]].copy()
+            export_df = self.table.model().data_for_columns(labels)
             if not opts["filename"].endswith(".dpt"):
                 opts["filename"] = opts["filename"] + ".dpt"
             export_df.to_csv(opts["filename"], sep="\t", index=False, header=False)
@@ -243,110 +430,7 @@ class MainWindow(QMainWindow):
                 img_file = opts["filename"].rsplit(".", 1)[0] + "." + img_ext
                 self.plot_canvas.figure.savefig(img_file, format=img_ext)
 
-    def compensate_background(self):
-        from scipy.interpolate import PchipInterpolator
-        import numpy as np
-        from numpy.typing import NDArray
-        
-        def _baseline_on_key_point(x_minima: NDArray[np.int64],
-                                  y_minima: NDArray[np.float64],
-                                  x: NDArray[np.int64]) -> NDArray[np.float64]:
-            pchip = PchipInterpolator(x_minima, y_minima)
-            baseline = pchip(x)
-            return baseline
-        
-        
-        def _direct_method(x_array: NDArray[np.int64],
-                          y_array: NDArray[np.float64],
-                          num_points: int) -> NDArray[np.int64]:
-        
-            y_chunks = np.array_split(y_array, num_points)
-            x_chunks = np.array_split(x_array, num_points)
-        
-            min_indices = np.array([
-                x_chunk[np.argmin(y_chunk)]
-                for y_chunk, x_chunk in zip(y_chunks, x_chunks)
-            ])
-        
-            return min_indices
-        
-        
-        def _fix_points(key_points: NDArray[np.int64],
-                       eps: int,
-                       y_array: NDArray[np.float64]) -> NDArray[np.float64]:
-            starts = np.maximum(key_points - eps, 0)
-            ends = np.minimum(key_points + eps, len(y_array))
-        
-            new_points = np.array([
-                start + np.argmin(y_array[start:end])
-                for start, end in zip(starts, ends)
-            ])
-        
-            return np.unique(new_points)
 
-        if not hasattr(self, 'combined_df'):
-            return  # No data to compensate
-        
-        for col in self.combined_df.columns:
-            if col == 'Wavenumber':
-                continue
-            y = self.combined_df[col]
-
-            # y = self.df["Intensity"]
-            # x = self.df["Wavenumber"]
-
-            indexes = [i for i in range(len(y))]
-            y_array = np.array(y)
-            indexes_array = np.array(indexes)
-
-            y_dim: int = np.shape(y_array)[0]
-            eps: int = max(int(0.02 * y_dim), 1)
-            best_score_result: int = y_dim
-            best_key_points: np.array([], dtype=np.int64)
-
-            for num_points in range(3, 10, 1):
-                direct_key_point = _direct_method(indexes_array, y_array, num_points)
-                fixed_points_without_zero = _fix_points(direct_key_point, eps, y_array)
-                baseline_without_zero = _baseline_on_key_point(
-                    fixed_points_without_zero,
-                    y_array[fixed_points_without_zero],
-                    indexes_array
-                )
-                score_without_zero = np.sum(y_array < baseline_without_zero)
-
-                points_with_zero = np.unique(np.append(direct_key_point, 0))
-                fixed_points_with_zero = _fix_points(points_with_zero, eps, y_array)
-                baseline_with_zero = _baseline_on_key_point(
-                    fixed_points_with_zero,
-                    y_array[fixed_points_with_zero],
-                    indexes_array
-                )
-                score_with_zero = np.sum(y_array < baseline_with_zero)
-
-                if score_without_zero <= score_with_zero:
-                    current_score = score_without_zero
-                    current_points = fixed_points_without_zero
-                else:
-                    current_score = score_with_zero
-                    current_points = fixed_points_with_zero
-
-                if current_score < best_score_result:
-                    best_score_result = current_score
-                    best_key_points = current_points
-
-            y_for_best_x = y_array[best_key_points]
-
-            baseline = _baseline_on_key_point(best_key_points, y_for_best_x, indexes_array)
-
-            compensated = y - baseline
-
-            self.combined_df[col] = compensated - np.min(compensated)
-
-
-            self.table.setModel(PandasModel(self.combined_df))
-            self.plot_all_combined_spectra()
-            # self.plot_canvas.plot(self.df["Wavenumber"], self.df["Compensated"])
-            # self.current_spectrum_col = "Compensated"
 
 
 if __name__ == "__main__":
