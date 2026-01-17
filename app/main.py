@@ -35,6 +35,9 @@ from PyQt6.QtGui import QAction, QIcon
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
+from translator import Translator
+
+translator = Translator('ru')
 DisplayRole = Qt.ItemDataRole.DisplayRole
 
 
@@ -64,7 +67,7 @@ class PandasModel(QAbstractTableModel):
         return None
 
     def compensate_background(self):
-        from .preprocess import compensate_background
+        from preprocess import compensate_background
 
         self._dataframe = compensate_background(self._dataframe)
         n_cols = self.columnCount()
@@ -72,7 +75,7 @@ class PandasModel(QAbstractTableModel):
         self.dataChanged.emit(self.index(0, 1), self.index(n_rows - 1, n_cols - 1))
 
     def normalize_total(self):
-        from .preprocess import normalize_total
+        from preprocess import normalize_total
 
         self._dataframe = normalize_total(self._dataframe)
         n_cols = self.columnCount()
@@ -80,7 +83,7 @@ class PandasModel(QAbstractTableModel):
         self.dataChanged.emit(self.index(0, 1), self.index(n_rows - 1, n_cols - 1))
 
     def normalize_in_range(self, wavelenght_range: tuple[float, float]):
-        from .preprocess import normalize_in_range
+        from preprocess import normalize_in_range
 
         self._dataframe = normalize_in_range(self._dataframe, wavelenght_range)
         n_cols = self.columnCount()
@@ -150,13 +153,13 @@ class SetRangeDialog(QDialog):
 
         start_layout = QHBoxLayout()
         self.start_edit = QLineEdit(self)
-        self.start_edit.setPlaceholderText("Set range start")
+        self.start_edit.setPlaceholderText(translator.tr("Set range start"))
         start_layout.addWidget(self.start_edit)
         layout.addLayout(start_layout)
 
         stop_layout = QHBoxLayout()
         self.stop_edit = QLineEdit(self)
-        self.stop_edit.setPlaceholderText("Set range stop")
+        self.stop_edit.setPlaceholderText(translator.tr("Set range end"))
         stop_layout.addWidget(self.stop_edit)
         layout.addLayout(stop_layout)
 
@@ -180,7 +183,7 @@ class SetNComponents(QDialog):
 
         components_layout = QHBoxLayout()
         self.components_edit = QLineEdit(self)
-        self.components_edit.setPlaceholderText("Set number of components")
+        self.components_edit.setPlaceholderText(translator.tr("Set number of components"))
         components_layout.addWidget(self.components_edit)
         layout.addLayout(components_layout)
 
@@ -198,29 +201,32 @@ class ExportDialog(QDialog):
         # File name entry with file dialog button
         file_layout = QHBoxLayout()
         self.file_edit = QLineEdit(self)
-        self.file_edit.setPlaceholderText("Choose filename for spectrum")
-        file_btn = QPushButton("Browse...", self)
+        self.file_edit.setPlaceholderText(translator.tr("Choose filename for spectrum"))
+        file_btn = QPushButton(translator.tr("Browse..."), self)
         file_btn.clicked.connect(self.open_file_dialog)
-        file_layout.addWidget(QLabel("Spectrum file:", self))
+        file_layout.addWidget(QLabel(translator.tr("Spectrum file:"), self))
         file_layout.addWidget(self.file_edit)
         file_layout.addWidget(file_btn)
         layout.addLayout(file_layout)
 
         # Option to save image
-        img_layout = QHBoxLayout()
-        self.save_img_checkbox = QCheckBox("Save plot image", self)
+        img_check_layout = QHBoxLayout()
+        self.save_img_checkbox = QCheckBox(translator.tr("Save plot image"), self)
         self.save_img_checkbox.setChecked(True)
-        img_layout.addWidget(self.save_img_checkbox)
+        img_check_layout.addWidget(self.save_img_checkbox)
+        layout.addLayout(img_check_layout)
+
+        img_layout = QHBoxLayout()
         self.img_format_combo = QComboBox(self)
         self.img_format_combo.addItems(["PNG", "TIFF"])
-        img_layout.addWidget(QLabel("Image format:", self))
+        img_layout.addWidget(QLabel(translator.tr("Image format:"), self))
         img_layout.addWidget(self.img_format_combo)
         layout.addLayout(img_layout)
 
         # Ok/Cancel buttons
         btn_layout = QHBoxLayout()
-        ok_btn = QPushButton("Export", self)
-        cancel_btn = QPushButton("Cancel", self)
+        ok_btn = QPushButton(translator.tr("Export"), self)
+        cancel_btn = QPushButton(translator.tr("Cancel"), self)
         ok_btn.clicked.connect(self.accept)
         cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(ok_btn)
@@ -306,9 +312,9 @@ class PandasView(QTableView):
             msg.setIcon(QMessageBox.Icon.Warning)
             msg.setWindowTitle("Warning: Unmatched Wavenumbers")
             msg.setText(
-                "Some loaded spectra have uncorresponding wavenumbers.\n"
+                translator.tr("Some loaded spectra have uncorresponding wavenumbers.\n"
                 "Rows with missing values will be removed.\n"
-                "Please click 'OK' to proceed."
+                "Please click 'OK' to proceed.")
             )
             msg.setStandardButtons(QMessageBox.StandardButton.Ok)
             msg.exec()
@@ -346,35 +352,35 @@ class MainWindow(QMainWindow):
         toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, toolbar)
 
-        load_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.DocumentNew), "New project", self)
+        load_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.DocumentNew), translator.tr("New project"), self)
         load_action.triggered.connect(self.new_project)
         toolbar.addAction(load_action)
 
-        load_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.EditPaste), "Add spectra", self)
+        load_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.EditPaste), translator.tr("Add spectra"), self)
         load_action.triggered.connect(self.add_spectra)
         toolbar.addAction(load_action)
 
-        export_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.DocumentSave), "Export spectrum", self)
+        export_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.DocumentSave), translator.tr("Export spectrum"), self)
         export_action.triggered.connect(self.export_spectrum)
         toolbar.addAction(export_action)
 
-        compensate_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), "Compensate background", self)
+        compensate_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), translator.tr("Compensate background"), self)
         compensate_action.triggered.connect(self.table.compensate_background)
         toolbar.addAction(compensate_action)
 
-        compensate_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), "Normalize total", self)
+        compensate_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), translator.tr("Normalize total"), self)
         compensate_action.triggered.connect(self.table.normalize_total)
         toolbar.addAction(compensate_action)
 
-        compensate_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), "Normalize in range", self)
+        compensate_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), translator.tr("Normalize in range"), self)
         compensate_action.triggered.connect(self.table.normalize_in_range)
         toolbar.addAction(compensate_action)
 
-        compensate_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), "Centered PCA", self)
+        compensate_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), translator.tr("Centered PCA"), self)
         compensate_action.triggered.connect(self.table.centered_pca)
         toolbar.addAction(compensate_action)
 
-        compensate_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), "StandardScaler PCA", self)
+        compensate_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), translator.tr("StandardScaler PCA"), self)
         compensate_action.triggered.connect(self.table.standardscaler_pca)
         toolbar.addAction(compensate_action)
 
