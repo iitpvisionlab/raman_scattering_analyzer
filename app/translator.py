@@ -1,6 +1,21 @@
-class Translator:
-    _translations = {
-        'en': {
+from PyQt6.QtCore import QObject, pyqtSignal
+from typing import Dict, Any
+
+
+class Translator(QObject):
+
+    language_changed = pyqtSignal()
+    
+    def __init__(self, initial_lang='en'):
+        super().__init__()
+        self._current_lang = initial_lang
+        self._translations: Dict[str, Dict[str, str]] = {
+            'en': self._load_english(),
+            'ru': self._load_russian()
+        }
+
+    def _load_english(self) -> Dict[str, str]:
+        return {
             "New project": "New project",
             'Add spectra': 'Add spectra',
             'Export spectrum': 'Export spectrum',
@@ -24,8 +39,11 @@ class Translator:
             "Please click 'OK' to proceed.": "Some loaded spectra have uncorresponding wavenumbers.\n"
             "Rows with missing values will be removed.\n"
             "Please click 'OK' to proceed.",
-        },
-        'ru': {
+            'En': 'En',
+        }
+    
+    def _load_russian(self) -> Dict[str, str]:
+        return {
             "New project": 'Новый проект',
             'Add spectra': 'Добавить спектры',
             'Export spectrum': 'Экспортировать спектр',
@@ -49,11 +67,51 @@ class Translator:
             "Please click 'OK' to proceed.": "Загружаемые спектры имеют несоответственные длины волн.\n"
             "Строки с пропущенными значениями будут удалены.\n"
             "Пожалуйста, нажмите 'OK', чтобы продолжить .",
+            'En': 'Ру',
         }
-    }
     
-    def __init__(self, lang='en'):
-        self.lang = lang
+    def _load_eng_from_rus(self) -> Dict[str, str]:
+        return {
+            'Новый проект': "New project",
+            'Добавить спектры': 'Add spectra',
+            'Экспортировать спектр': 'Export spectrum',
+            'Компенсировать фон': 'Compensate background',
+            'Нормализовать на полный': 'Normalize total',
+            'Нормализовать в диапазоне': 'Normalize in range',
+            'PCA с ковариационной матрицей': 'Centered PCA',
+            'PCA с корреляционной матрицей': 'StandardScaler PCA',
+            'Начало диапазона': 'Set range start',
+            'Конец диапазона': 'Set range end',
+            'Количество компонент': 'Set number of components',
+            'Название файла': 'Choose filename for spectrum',
+            'Найти...': 'Browse...',
+            'Сохранить изображение графика': 'Save plot image',
+            'Файл спектра': 'Spectrum file:',
+            'Формат изображения:': 'Image format:',
+            'Экспорт': 'Export',
+            'Отмена': 'Cancel',
+            "Загружаемые спектры имеют несоответственные длины волн.\n"
+            "Строки с пропущенными значениями будут удалены.\n"
+            "Пожалуйста, нажмите 'OK', чтобы продолжить .": "Some loaded spectra have uncorresponding wavenumbers.\n"
+            "Rows with missing values will be removed.\n"
+            "Please click 'OK' to proceed.",
+            'Ру': 'En',
+        }
     
-    def tr(self, text):
-        return self._translations[self.lang].get(text, text)
+    def tr_from_ru(self, key: str) -> str:
+        """Translate a key to current language"""
+        return self._load_eng_from_rus().get(key, key)
+       
+    def set_language(self, lang: str):
+        """Change language for entire application"""
+        if lang in self._translations:
+            self._current_lang = lang
+            # Emit signal to notify all windows
+            self.language_changed.emit()
+    
+    def get_language(self) -> str:
+        return self._current_lang
+    
+    def tr(self, key: str) -> str:
+        """Translate a key to current language"""
+        return self._translations.get(self._current_lang, {}).get(key, key)

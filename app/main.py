@@ -38,6 +38,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from translator import Translator
 
 translator = Translator('ru')
+
 DisplayRole = Qt.ItemDataRole.DisplayRole
 
 
@@ -347,42 +348,46 @@ class MainWindow(QMainWindow):
         self.setGeometry(100, 100, 800, 600)
         self.table = PandasView()
 
-        toolbar = QToolBar("Main Toolbar")
-        toolbar.setIconSize(QSize(24, 24))
-        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, toolbar)
+        self.toolbar = QToolBar("Main Toolbar")
+        self.toolbar.setIconSize(QSize(24, 24))
+        self.toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self.toolbar)
 
         load_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.DocumentNew), translator.tr("New project"), self)
         load_action.triggered.connect(self.new_project)
-        toolbar.addAction(load_action)
+        self.toolbar.addAction(load_action)
 
         load_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.EditPaste), translator.tr("Add spectra"), self)
         load_action.triggered.connect(self.add_spectra)
-        toolbar.addAction(load_action)
+        self.toolbar.addAction(load_action)
 
         export_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.DocumentSave), translator.tr("Export spectrum"), self)
         export_action.triggered.connect(self.export_spectrum)
-        toolbar.addAction(export_action)
+        self.toolbar.addAction(export_action)
 
         compensate_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), translator.tr("Compensate background"), self)
         compensate_action.triggered.connect(self.table.compensate_background)
-        toolbar.addAction(compensate_action)
+        self.toolbar.addAction(compensate_action)
 
-        compensate_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), translator.tr("Normalize total"), self)
-        compensate_action.triggered.connect(self.table.normalize_total)
-        toolbar.addAction(compensate_action)
+        normalize_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), translator.tr("Normalize total"), self)
+        normalize_action.triggered.connect(self.table.normalize_total)
+        self.toolbar.addAction(normalize_action)
 
-        compensate_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), translator.tr("Normalize in range"), self)
-        compensate_action.triggered.connect(self.table.normalize_in_range)
-        toolbar.addAction(compensate_action)
+        norm_in_range_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), translator.tr("Normalize in range"), self)
+        norm_in_range_action.triggered.connect(self.table.normalize_in_range)
+        self.toolbar.addAction(norm_in_range_action)
 
-        compensate_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), translator.tr("Centered PCA"), self)
-        compensate_action.triggered.connect(self.table.centered_pca)
-        toolbar.addAction(compensate_action)
+        centered_pca_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), translator.tr("Centered PCA"), self)
+        centered_pca_action.triggered.connect(self.table.centered_pca)
+        self.toolbar.addAction(centered_pca_action)
 
-        compensate_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), translator.tr("StandardScaler PCA"), self)
-        compensate_action.triggered.connect(self.table.standardscaler_pca)
-        toolbar.addAction(compensate_action)
+        standardscaler_pca_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), translator.tr("StandardScaler PCA"), self)
+        standardscaler_pca_action.triggered.connect(self.table.standardscaler_pca)
+        self.toolbar.addAction(standardscaler_pca_action)
+
+        change_locale_action = QAction(QIcon.fromTheme(QIcon.ThemeIcon.WeatherClear), translator.tr("En"), self)
+        change_locale_action.triggered.connect(self.change_locale)
+        self.toolbar.addAction(change_locale_action)
 
         # Layout for table and plot (side by side)
         table_plot_layout = QHBoxLayout()
@@ -435,6 +440,20 @@ class MainWindow(QMainWindow):
                 img_ext = opts["image_format"].lower()
                 img_file = opts["filename"].rsplit(".", 1)[0] + "." + img_ext
                 self.plot_canvas.figure.savefig(img_file, format=img_ext)
+    
+    def change_locale(self):
+        global translator
+        if translator.get_language() == "ru":
+            translator.set_language("en")
+            self.repaint()
+            for action in self.toolbar.actions():
+                if hasattr(action, 'text'):
+                    action.setText(translator.tr_from_ru(action.text()))
+        elif translator.get_language() == "en":
+            translator.set_language("ru")
+            for action in self.toolbar.actions():
+                if hasattr(action, 'text'):
+                    action.setText(translator.tr(action.text()))
 
 
 
